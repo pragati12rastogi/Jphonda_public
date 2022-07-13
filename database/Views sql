@@ -1,0 +1,145 @@
+// when Stock Movement
+create view smpending as (SELECT
+    GROUP_CONCAT(
+        DISTINCT `stock_movement`.`id`,
+        '' SEPARATOR ','
+    ) AS `smId`,
+    GROUP_CONCAT(
+        `stock_movement_details`.`id`,
+        '' SEPARATOR ','
+    ) AS `smdId`,
+    `stock_movement`.`from_store` AS `from_store`,
+    `stock_movement`.`to_store` AS `to_store`,
+    `stock_movement_details`.`product_id` AS `product_id`,
+    GROUP_CONCAT(
+        `stock_movement_details`.`product_details_id`,
+        '' SEPARATOR ','
+    ) AS `product_details_id`,
+    CASE WHEN `stock_movement_details`.`quantity` = 1 THEN COUNT(
+        `stock_movement_details`.`quantity`
+    ) ELSE 0
+    END AS `smdQty`,
+    CASE WHEN `stock_movement_details`.`quantity` = 2 THEN COUNT(
+        `stock_movement_details`.`quantity`
+    ) ELSE 0
+    END AS `smddQty`
+    FROM
+        (
+            `stock_movement`
+        JOIN `stock_movement_details` ON
+            (
+                `stock_movement`.`id` = `stock_movement_details`.`stock_movement_id` AND 				`stock_movement_details`.`status` IN('pending', 'process')
+                and stock_movement_details.deleted_at is null
+            )
+        )
+    WHERE
+        `stock_movement`.`status` <> 'moved' 
+        and stock_movement.deleted_at is null
+    GROUP BY
+        `stock_movement`.`from_store`,
+        `stock_movement`.`to_store`,
+        `stock_movement_details`.`product_id`,
+        `stock_movement_details`.`quantity`
+    ORDER BY
+        `stock_movement_details`.`created_at`
+    DESC
+)
+
+// sale redirection get link
+CREATE VIEW `sale_redirection` AS(
+    SELECT
+        `sale`.`id` AS `sale_id`,
+        `sale`.`total_amount` AS `total_amount`,
+        `sale`.`balance` AS `balance`,
+        SUM(`payment`.`amount`) AS `paid_amount`,
+        `sale_order`.`id` AS `order_id`,
+        `hirise`.`id` AS `hirise_id`,
+        `insurance`.`id` AS `insurance_id`,
+        `insurance`.`policy_number` AS `policy_number`,
+        `rto`.`id` AS `rto_id`,
+        `sale`.`pending_item` AS `pending_item_status`,
+        `order_pending_item`.`id` AS `pending_item_id`,
+        `otc`.`id` AS `otc_id`
+    FROM
+        (
+            (
+                (
+                    (
+                        (
+                            (
+                                (
+                                    `sale`
+                                LEFT JOIN `payment` ON
+                                    (
+                                        `sale`.`id` = `payment`.`sale_id` AND `payment`.`type` = 'sale'
+                                    )
+                                )
+                            LEFT JOIN `sale_order` ON
+                                (`sale_order`.`sale_id` = `sale`.`id`)
+                            )
+                        LEFT JOIN `hirise` ON
+                            (`hirise`.`sale_id` = `sale`.`id`)
+                        )
+                    LEFT JOIN `insurance` ON
+                        (`insurance`.`sale_id` = `sale`.`id`)
+                    )
+                LEFT JOIN `rto` ON
+                    (`rto`.`sale_id` = `sale`.`id`)
+                )
+            LEFT JOIN `order_pending_item` ON
+                (
+                    `order_pending_item`.`sale_id` = `sale`.`id`
+                )
+            )
+        LEFT JOIN `otc` ON
+            (`otc`.`sale_id` = `sale`.`id`)
+        )
+    GROUP BY
+        `sale`.`id`
+)
+
+/// for performance calculator 
+
+ SELECT rto_file_submission.id, rto_file_submission.submission_date,  rto.receiving_date, rto.id as rto_id, rto.file_submission, rto.rc_number FROM `rto_file_submission` left join rto_file_submission_details on rto_file_submission.id = rto_file_submission_details.file_submission_id 
+    left join rto on rto.id = rto_file_submission_details.rto_id and rto.receiving_date IS NOT null and rto.rc_number is not null
+    where rto.id is not null
+
+    create view agentPerRto as(SELECT rto_file_submission.id, rto_file_submission.agent_name, rto_file_submission.submission_date,  rto.receiving_date,
+    DATEDIFF(receiving_date,submission_date) as taken_day,
+    rto.id as rto_id, rto.file_submission, rto.rc_number FROM `rto_file_submission` 
+    left join rto_file_submission_details on rto_file_submission.id = rto_file_submission_details.file_submission_id 
+    left join rto on rto.id = rto_file_submission_details.rto_id and rto.receiving_date IS NOT null and rto.rc_number is not null
+    where rto.id is not null
+)
+
+    create view agent_per_submission as(
+        SELECT id, agent_name, submission_date, receiving_date,
+        SUM(taken_day) as totalTakeDays,
+        count(id)	as numOfFile,
+        IF(sum(taken_day) <= 15*COUNT(id), 'good' , 
+        IF(sum(taken_day) >= 20*COUNT(id), 'avg' , 'bad')
+        ) as performanceStatus ,
+    
+        FROM `agent_per_rto`
+        GROUP by id
+    )
+
+    SELECT id, agent_name,
+        SUM(totalTakeDays) as totalTakeDays,
+        sum(numOfFile)	as numOfFile,
+        IF(sum(totalTakeDays) <= 15*SUM(numOfFile), 'good' , 
+        IF(sum(totalTakeDays) >= 20*SUM(numOfFile), 'avg' , 'bad')
+        ) as performanceStatus 
+        FROM `agent_per_submission`
+        GROUP by agent_name
+
+
+// for auto assign bike to BAY for servcing.
+
+select bay.id as bay_id,bay.name,bay.type,bay_allocation.id as bay_allocation_id, bay_allocation.job_card_id,
+if(bay_allocation.start_time IS null,TIME_FORMAT(CURRENT_TIME, "%h:%i:%s"),bay_allocation.start_time) as start_time,
+if(bay_allocation.end_time IS null,TIME_FORMAT(CURRENT_TIME, "%h:%i:%s"),bay_allocation.end_time) as end_time,
+bay_allocation.date, bay_allocation.status from
+bay left join bay_allocation on bay_allocation.bay_id = bay.id
+where bay.type = 'Free' and (bay_allocation.status = 'pending' || STATUS is null )
+and if(bay_allocation.end_time is null, TIME_FORMAT(CURRENT_TIME, "%h:%i:%s"), bay_allocation.end_time) >= TIME_FORMAT(CURRENT_TIME, "%h:%i:%s")

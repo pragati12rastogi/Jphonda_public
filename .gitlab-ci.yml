@@ -1,0 +1,17 @@
+image: php:7.2.19
+stages:
+  - deploy
+
+deploy_staging:
+  stage: deploy
+  script:
+    - echo "Deploy to staging server."
+    - cd /var/www/html/jphonda
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n"
+    - git checkout master
+    - git pull origin master
+
+  environment:
+    name: staging
+  only:
+  - master
